@@ -121,7 +121,7 @@ def client_thread(conn, addr):
         cmd = request['cmd']
         if cmd == 'exit': 
             break
-        else if cmd not in commands:
+        if cmd not in commands:
             # notify client that this is not a valid cmd
             response = { "echo": "command '{0}' is not supported".format(cmd) }
             conn.sendall(json.dumps(response))
