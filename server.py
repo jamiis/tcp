@@ -1,69 +1,77 @@
 import argparse, sys, socket, json, thread
+from datetime import datetime
 
 BUFFER_SIZE = 1024
 
-def whoelse(cport, request):
-    print 'whoelse!!!'
+def whoelse(sock, request):
+    """
+    echo list of all connected users to requesting client. 
+    list will have no repeats even if a user is logged in multiple times.
+    """
+    users = set()
+    for s in connections.values():
+        users.add(s['user'])
+    response = { "echo": "\n".join(users) }
+    sock['conn'].sendall(json.dumps(response))
 
-def wholasthr(cport, request):
-    print 'wholasthr!!!'
+def wholasthr(sock, request):
+    """echo unique list of users that logged-in within in the past hr"""
+    users = set()
+    for s in history:
+        # if connection was made in the last hour
+        if time_elapsed_leq(s['time'], datetime.utcnow(), 60*60):
+            users.add(s['user'])
+    response = { "echo": "\n".join(users) }
+    sock['conn'].sendall(json.dumps(response))
 
-def broadcast(cport, request):
+def broadcast(sock, request):
     # notify user if no broadcast msg was included
     if 'args' not in request or request['args'] == "":
         response = { "echo": "please specify a message you would like to broadcast" }
-        connection = connections[cport]['conn']
-        connection.sendall(json.dumps(response))
+        sock['conn'].sendall(json.dumps(response))
     # broadcast message to all connections
     response = { "echo": "<broadcast>: {0}".format(request['args']) }
-    for port, sock_info in connections.iteritems():
-        print port, sock_info, response
-        sock_info['conn'].sendall(json.dumps(response))
+    for s in connections.values():
+        s['conn'].sendall(json.dumps(response))
 
-commands = {
-    'whoelse'  : whoelse,
-    'wholasthr': wholasthr,
-    'broadcast': broadcast,
-}
+def block_machine(sock):
+    '''block logins attempts from ip for 60 seconds and close the connection'''
+    ip = sock['addr'][0]
+    print "blocking connections from {0} for 60 seconds".format(ip)
+    blocked[ip] = { 'time': datetime.utcnow() }
+    close(sock)
 
-# keep track of all clients connected
-# dict keys will be client port numbers
-connections = {}
-
-# the usernames and passwords of those allowed to login
-# (*obviously* unsecure)
-# TODO must be a file
-allowed = {
-    'Columbia' : '116bway',
-    'SEAS'     : 'summerisover',
-    'csee4119' : 'lotsofexams',
-    'foobar'   : 'passpass',
-    'windows'  : 'withglass',
-    'Google'   : 'hasglasses',
-    'facebook' : 'wastingtime',
-    'wikipedia': 'donation',
-    'network'  : 'seemse',
-}
-
-def block_machine(conn, addr):
-    ''' blocks logins from addr for 60 seconds and closes the connection '''
-    print "blocking connections from {0} for 60 seconds".format(addr[0])
-    # TODO store machine addr and current time in list of blocked addresses
-    close_connection(conn, addr)
-
-def is_blocked(conn, addr):
-    # TODO
+def is_blocked(sock):
+    ip = sock['addr'][0]
+    if ip in blocked:
+        if time_elapsed_leq(blocked[ip]['time'], datetime.utcnow(), 60):
+            return True
+        # unblock ip. 60 seconds has elapsed since ip was blocked.
+        del blocked[ip]
     return False
 
-def close_connection(conn, addr):
+def close(sock):
+    """close the socket with client port 'cport' and remove from 'connections'"""
+    cport = sock['addr'][1]
+    if cport not in connections:
+        # socket has already closed
+        return
+    addr = sock['addr']
     print 'closing connection with: {0}:{1}'.format(addr[0], addr[1])
-    conn.close()
+    sock['conn'].close()
+    del connections[cport]
 
-def client_thread(conn, addr):
+def time_elapsed_leq(start, end, elapsed):
+    return (end - start).total_seconds() <= elapsed
+
+def client_thread(sock):
+    conn = sock['conn']
+    addr = sock['addr']
+    
     # client must gain access before allowed to submit cmds
     access = { 
         'is_granted': False,
-        'is_blocked': is_blocked(conn, addr),
+        'is_blocked': is_blocked(sock),
     }
 
     # check right away if client is listed as blocked
@@ -71,6 +79,7 @@ def client_thread(conn, addr):
     if data != "is_blocked":
         return # the client cheated, so return and close conn
     conn.send(json.dumps(access))
+    if is_blocked(sock): return
 
     # await submission of client credentials
     while not access['is_granted']:
@@ -84,6 +93,10 @@ def client_thread(conn, addr):
                     .format(addr[0],addr[1])
                 access['is_granted'] = True
                 conn.sendall(json.dumps(access))
+                # populate socket with login information
+                sock['user'] = creds['user']
+                sock['time'] = datetime.utcnow()
+                sock['has_access'] = True
                 break
             else:
                 # client gave bad credentials
@@ -91,7 +104,9 @@ def client_thread(conn, addr):
                     # block logins from this machine
                     access['is_blocked'] = True
                     conn.sendall(json.dumps(access))
-                    block_machine(conn, addr)
+                    #response = { "closing": True }
+                    #sock['conn'].sendall(json.dumps(response))
+                    block_machine(sock)
                     return
                 else:
                     # notify client access was denied
@@ -100,16 +115,7 @@ def client_thread(conn, addr):
                     conn.sendall(json.dumps(access))
 
     # access granted to client at this point
-    # the client port is a unique id for this connection
-    cport = addr[1]
-    # add conn info to conns dict
-    connections[cport] = {
-        'conn': conn, 
-        'addr': addr,
-        'time': 999, # TODO
-        # TODO: do we need to store usernames to disallow signing
-        #       in multiple times by unser one username?
-    }
+    history.append(sock)
 
     while True:
         request = json.loads(conn.recv(BUFFER_SIZE))
@@ -119,20 +125,20 @@ def client_thread(conn, addr):
 
         # extract cmd, validate, call corresponding func
         cmd = request['cmd']
-        if cmd == 'exit': 
-            break
+        if cmd == "exit": 
+            response = { "closing": True }
+            sock['conn'].sendall(json.dumps(response))
+            close(sock)
+            return
         if cmd not in commands:
             # notify client that this is not a valid cmd
             response = { "echo": "command '{0}' is not supported".format(cmd) }
             conn.sendall(json.dumps(response))
         else:
             # command is valid, so call into function
-            commands[cmd](cport, request)
+            commands[cmd](sock, request)
 
-    if conn:
-        close_connection(conn, addr)
-
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'port', 
@@ -162,9 +168,49 @@ if __name__ == '__main__':
     
     while True:
         conn, addr = sock.accept()
+        # 'sock' dict will replace sock socket. 
+        # only adds information, does not delete info.
+        s = {
+            'conn'      : conn, 
+            'addr'      : addr,
+            'time'      : None, # filled in when user logs in
+            'user'      : None, # ditto
+            'has_access': False,
+        }
+        # the client port is a unique id for this connection
+        cport = addr[1]
+        # add conn info to conns dict
+        connections[cport] = s
         # spawn thread to handle connection
-        thread.start_new_thread(client_thread, (conn, addr))
+        thread.start_new_thread(client_thread, (s,))
 
-    if sock:
-        print 'closing socket'
-        sock.close()
+    close(s)
+    #sock.close()
+
+commands = {
+    'whoelse'  : whoelse,
+    'wholasthr': wholasthr,
+    'broadcast': broadcast,
+}
+
+# keep track of all clients connected
+# dict keys will be client port numbers
+connections = {}
+
+# keep an historical account of every connection. would have used 'connections' variable
+# but client port numbers are eventually recycled which would have caused problems
+history = []
+
+# maintain dict of blocked ip addresses
+blocked = {}
+
+# the usernames and passwords of those allowed to login
+# (*obviously* unsecure)
+f = open('allowed', 'r')
+allowed = {}
+for line in f:
+    [user, pwd] = line.strip().split(" ")
+    allowed[user] = pwd
+
+if __name__ == '__main__':
+    main()

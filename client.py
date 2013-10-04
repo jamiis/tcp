@@ -3,7 +3,7 @@ import argparse, socket, sys, json, thread
 BUFFER_SIZE = 1024
 
 def blocked():
-    print "You have been blocked from logging in for 60 seconds"
+    print "you have been blocked from logging in for 60 seconds"
 
 def connect(sock, host, port):
     sock.connect((host, port))
@@ -24,21 +24,36 @@ def connect(sock, host, port):
             'pwd' : pwd,
         }))
         access = json.loads(sock.recv(BUFFER_SIZE))
-        if not access['is_granted']:
-            print "access denied. bad username or password"
-            continue
         if access['is_blocked']:
             blocked()
             return
+        elif not access['is_granted']:
+            print "access denied. bad username or password"
+            continue
 
     print "access granted. welcome."
 
+    def proc_kill():
+        sys.exit()
+
     # spawn thread to handle receiving all server communication
     # thread required bc server can broadcast to client w/out client talking to server
-    thread.start_new_thread(recv_thread, (sock,))
+    thread.start_new_thread(send_thread, (sock,))
 
     while True:
+        # when socket is closed, destroy thread
+        if not sock: return
+        # await comm. from server
+        response = json.loads(sock.recv(BUFFER_SIZE))
+        if 'closing' in response:
+            proc_kill()
+        if 'echo' in response:
+            print response['echo']
+
+def send_thread(sock):
+    while True:
         # prompt user for input
+        # TODO try and do custom recv so that we can have '>' at the prompt
         prompt = raw_input().strip()
         if not prompt:
             continue # there wasn't any cmd input
@@ -46,23 +61,15 @@ def connect(sock, host, port):
         # extract command and args from user input
         split = prompt.split(' ',1)
         request = { 'cmd': split[0] }
+        if split[0] == 'kill':
+            sys.exit()
         if len(split) > 1:
             request['args'] = split[1]
 
         # send command + args to server
         sock.sendall(json.dumps(request))
 
-def recv_thread(sock):
-    while True:
-        # when socket is closed, destroy thread
-        if not sock: return
-        # await comm. from server
-        response = json.loads(sock.recv(BUFFER_SIZE))
-        if 'echo' in response:
-            print response['echo']
-
-
-if __name__ == '__main__':
+def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         'host', 
@@ -90,3 +97,6 @@ if __name__ == '__main__':
 
     # when connect returns, close socket
     sock.close()
+
+if __name__ == '__main__':
+    main()
