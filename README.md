@@ -1,9 +1,16 @@
-sockets
+tcp
 =======
 
-a basic python server and client to learn sockets.
+a (very) basic implementation of tcp.
 made for columbia's computer networks class.
 
+contents:
+    application:
+        application layer client and server from comp. networks prog. assignment 1
+    network: 
+        network layer implementation of tcp (with selective repeat) on top of udp.
+
+CHANGE ME:
 howto run:
 server:
     > python server.py <port>

@@ -1,4 +1,5 @@
 import argparse, sys, socket, json, thread
+from tcp_socket import tcp_socket
 from datetime import datetime
 
 BUFFER_SIZE = 1024
@@ -149,8 +150,8 @@ def main():
 
     # TODO validate port
 
-    # instatiate socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    # instatiate tcp socket
+    sock = tcp_socket()
 
     print 'socket initialized'
 
@@ -162,7 +163,7 @@ def main():
                error code: {0}, msg:{1}".format(msg[0], msg[1])
         sys.exit()
 
-    sock.listen(100)
+    # TODO can this be commented out? sock.listen(100)
 
     print 'socket listening on {0}:{1}'.format(host, args.port)
     
