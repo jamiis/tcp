@@ -69,7 +69,7 @@ class TcpSocket(object):
     def bind(self, addr):
         '''bind receiver to listen for transmissions'''
         self.setup_addr(addr)
-        self.s.bind(self.addr)
+        self.s.bind((self.addr[0], 9999))
         self.logger.log('listening on: {0}'.format(self.addr))
 
     def connect(self, addr):
