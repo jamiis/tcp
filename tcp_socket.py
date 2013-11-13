@@ -69,13 +69,13 @@ class TcpSocket(object):
     def bind(self, addr):
         '''bind receiver to listen for transmissions'''
         self.setup_addr(addr)
-        self.s.bind((self.addr[0], 9999))
+        self.s.bind(self.addr)
         self.logger.log('listening on: {0}'.format(self.addr))
 
     def connect(self, addr):
         '''bind ack socket to listen for acks'''
         self.setup_addr(addr)
-        self.ack_sock.bind(self.ack_addr)
+        self.ack_sock.bind((self.ack_addr[0], 9999))
 
     def recv(self): 
         # TODO ask TA how to handle removing null chars on last packet.
