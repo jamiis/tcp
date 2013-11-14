@@ -105,9 +105,9 @@ class TcpSocket(object):
         while not self.is_finished:
             # receive and unpack packet
             r, addr = self.s.recvfrom(SEGMENT_SIZE)
-            self.logger.log('received from: {0}'.format(addr))
             src, dst, seqnum, acknum, headlen, checksum, fin, eof, unused, data = \
                 self.segment.unpack(r)
+            self.logger.log('received packet {0} from: {1}'.format(seqnum, addr))
             # if this is the last packet (aka highest sequence number)
             if eof: 
                 # mark buffered packet as last
@@ -169,7 +169,7 @@ class TcpSocket(object):
 
         self.s.sendto(packet, self.remote)
         self.transmitted[seqnum] = True
-        self.logger.log('sent packet: {0}'.format(seqnum))
+        self.logger.log('sent packet {0} to {1}'.format(seqnum, self.remote))
         Timer(TIMEOUT, self.retransmit_packet, [seqnum]).start()
 
     def retransmit_packet(self, seqnum):
@@ -199,8 +199,8 @@ class TcpSocket(object):
         # TODO closing connection needs to be done on application layer
         while not self.is_finished:
             ack_data, addr = self.s.recvfrom(SEGMENT_SIZE)
-            self.logger.log('received ack from: {0}'.format(addr))
             seqnum, = struct.unpack('i', ack_data)
+            self.logger.log('received ack {0} from: {1}'.format(seqnum, addr))
             if self.in_window(seqnum):
                 self.ack(seqnum)
         self.logger.log('file sent successfully')
