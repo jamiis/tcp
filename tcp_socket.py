@@ -28,13 +28,21 @@ class TcpSocket(object):
     # segment represents a packet. tcp header + chunk of data.
     segment = struct.Struct(SEGMENT_FORMAT)
 
-    def __init__(self, ack_port, log_filename, window_size=10):
+    def __init__(self, remote, port, log, window=10):
+        # get that logger setup so we can start using it pronto!
+        self.logger = Logger(log)
         # not using inheritance bc of python's odd wrapper for socket.socket
-        self.window_size = window_size
-        self.ack_port = ack_port
         self.s = socket(AF_INET, SOCK_DGRAM)
-        self.ack_sock = socket(AF_INET, SOCK_DGRAM)
-        self.logger = Logger(log_filename)
+        # listen at this address
+        host = gethostbyname(gethostname())
+        self.s.bind((host, port))
+        self.logger.log('listening on: {0}:{1}'.format(host, port))
+        # set address being transmitted to
+        if remote[0].lower() == 'localhost':
+            remote[0] = gethostbyname(gethostname())
+        self.remote = tuple(remote)
+        # set window size for SR protocol
+        self.window_size = window
 
     def __getattr__(self,name):
         return getattr(self.s, name)
@@ -62,20 +70,27 @@ class TcpSocket(object):
         self.base = 0  # selective-repeat window base
         self.is_finished = False # is the file done transmitting?
 
-    def setup_addr(self, addr):
+    ''' TODO remove
+    def set_remote_addr(self, addr):
+        # TODO
         self.addr = addr
         self.ack_addr = (addr[0], self.ack_port)
+    '''
 
+    """ TODO fix this?
     def bind(self, addr):
         '''bind receiver to listen for transmissions'''
-        self.setup_addr(addr)
+        # TODO self.setup_addr(addr)
         self.s.bind(self.addr)
         self.logger.log('listening on: {0}'.format(self.addr))
+    """
 
+    """
     def connect(self, addr):
         '''bind ack socket to listen for acks'''
         self.setup_addr(addr)
-        self.ack_sock.bind((self.ack_addr[0], 9999))
+        self.ack_sock.bind(self.ack_addr)
+    """
 
     def recv(self): 
         # TODO ask TA how to handle removing null chars on last packet.
@@ -89,7 +104,8 @@ class TcpSocket(object):
         # loop until the data has finished transmitting
         while not self.is_finished:
             # receive and unpack packet
-            r = self.s.recv(SEGMENT_SIZE)
+            r, addr = self.s.recvfrom(SEGMENT_SIZE)
+            self.logger.log('received from: {0}'.format(addr))
             src, dst, seqnum, acknum, headlen, checksum, fin, eof, unused, data = \
                 self.segment.unpack(r)
             # if this is the last packet (aka highest sequence number)
@@ -130,8 +146,8 @@ class TcpSocket(object):
 
     def transmit_ack(self, seqnum):
         packet = struct.pack('i', seqnum)
-        self.ack_sock.sendto(packet, self.ack_addr)
-        self.logger.log('ack sent: {0}'.format(seqnum))
+        self.s.sendto(packet, self.remote)
+        self.logger.log('ack {0} sent to: {1}'.format(seqnum, self.remote))
 
     def transmit_packet(self, seqnum):
         # TODO need to checksum over data *and* header? yes
@@ -151,7 +167,7 @@ class TcpSocket(object):
             fin, eof, '', data
         )
 
-        self.s.sendto(packet, self.addr)
+        self.s.sendto(packet, self.remote)
         self.transmitted[seqnum] = True
         self.logger.log('sent packet: {0}'.format(seqnum))
         Timer(TIMEOUT, self.retransmit_packet, [seqnum]).start()
@@ -182,7 +198,8 @@ class TcpSocket(object):
     def recv_acks(self):
         # TODO closing connection needs to be done on application layer
         while not self.is_finished:
-            ack_data = self.ack_sock.recv(SEGMENT_SIZE)
+            ack_data, addr = self.s.recvfrom(SEGMENT_SIZE)
+            self.logger.log('received ack from: {0}'.format(addr))
             seqnum, = struct.unpack('i', ack_data)
             if self.in_window(seqnum):
                 self.ack(seqnum)
@@ -223,7 +240,7 @@ class TcpSocket(object):
         # TODO remove?
         if not self.closed:
             fin = struct.pack('i', 1)
-            self.ack_sock.sendto(fin, self.ack_addr)
+            self.s.sendto(fin, self.remote)
             Timer(TIMEOUT, send_fin)
 
     def close_conn():
@@ -231,7 +248,7 @@ class TcpSocket(object):
         # TODO
         send_fin()
         while True:
-            ack_data = self.ack_sock.recv(SEGMENT_SIZE)
+            ack_data = self.s.recv(SEGMENT_SIZE)
             fin, = struct.unpack('i', ack_data)
             self.logger.log('fin ack received!: {0}'.format(seqnum))
             if fin: break
