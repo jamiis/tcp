@@ -11,6 +11,4 @@ sock = TcpSocket(
     window = arg.window_size,
 )
 sock.sendall(data)
-# TODO host = arg.remote_ip if arg.remote_ip != 'localhost' else socket.gethostbyname(arg.remote_ip)
-# TODO sock.connect((host, arg.remote_port))
 # TODO close socket?

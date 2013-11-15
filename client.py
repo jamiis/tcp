@@ -1,16 +1,14 @@
-import argparse, socket, sys, json, thread
-
-BUFFER_SIZE = 1024
+from tcp_socket import TcpSocket
+import argparse, socket, sys, json
+from threading import Thread
 
 def blocked():
     print "you have been blocked from logging in for 60 seconds"
 
-def connect(sock, host, port):
-    sock.connect((host, port))
-
+def connect(sock):
     # first check if machine is blocked 
-    sock.send("is_blocked")
-    access = json.loads(sock.recv(BUFFER_SIZE))
+    sock.sendall("is_blocked")
+    access = json.loads(sock.recv())
     if access['is_blocked']:
         blocked()
         return
@@ -23,7 +21,7 @@ def connect(sock, host, port):
             'user': user,
             'pwd' : pwd,
         }))
-        access = json.loads(sock.recv(BUFFER_SIZE))
+        access = json.loads(sock.recv())
         if access['is_blocked']:
             blocked()
             return
@@ -38,13 +36,15 @@ def connect(sock, host, port):
 
     # spawn thread to handle receiving all server communication
     # thread required bc server can broadcast to client w/out client talking to server
-    thread.start_new_thread(send_thread, (sock,))
+    # TODO thread.start_new_thread(send_thread, (sock,))
+    # Thread(target=send_thread, args=(sock,)).run()
+    send_thread(sock)
 
     while True:
         # when socket is closed, destroy thread
         if not sock: return
         # await comm. from server
-        response = json.loads(sock.recv(BUFFER_SIZE))
+        response = json.loads(sock.recv())
         if 'closing' in response:
             proc_kill()
         if 'echo' in response:
@@ -54,7 +54,7 @@ def send_thread(sock):
     while True:
         # prompt user for input
         # TODO try and do custom recv so that we can have '>' at the prompt
-        prompt = raw_input().strip()
+        prompt = raw_input('> ').strip()
         if not prompt:
             continue # there wasn't any cmd input
 
@@ -69,34 +69,43 @@ def send_thread(sock):
         # send command + args to server
         sock.sendall(json.dumps(request))
 
+        response = json.loads(sock.recv())
+        if 'closing' in response:
+            sys.exit()
+        if 'echo' in response:
+            print response['echo']
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        'host', 
-        help='the host name the client will attempt to connect to',
-    )
-    parser.add_argument(
-        'port', 
-        help='the port the server will listen on',
-        type=int,
-    )
-    # TODO validate host and port
+    parser.add_argument('server_ip',  help='remote host')
+    parser.add_argument('server_port', help='remote port ', type=int)
+    parser.add_argument('filename',  help='name of file being transferred')
+    parser.add_argument('listening_port', help='the port the server will listen on', type=int)
+    parser.add_argument('remote_ip',  help='remote host')
+    parser.add_argument('remote_port', help='remote port ', type=int)
+    parser.add_argument('log_filename',   help='name of log file being transferred')
+    arg = parser.parse_args()
 
-    args = parser.parse_args()
-
+    ''' TODO
     # conditionally resolve localhost
     if args.host == "localhost":
         host = socket.gethostbyname(args.host) 
     else:
         host = args.host 
+    '''
 
     # instatiate socket
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    print "attempting to connect on {0}:{1}".format(host, args.port)
-    connect(sock, host, args.port)
+    sock = TcpSocket(
+        remote = [arg.remote_ip, arg.remote_port],
+        port   = arg.listening_port,
+        log    = arg.log_filename,
+    )
+    # TODO print "attempting to connect on {0}:{1}".format(host, arg.port)
+    connect(sock)
 
     # when connect returns, close socket
-    sock.close()
+    # TODO sock.close()
 
 if __name__ == '__main__':
     main()

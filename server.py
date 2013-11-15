@@ -1,8 +1,7 @@
+from threading import Thread
 import argparse, sys, socket, json, thread
-from tcp_socket import tcp_socket
+from tcp_socket import TcpSocket
 from datetime import datetime
-
-BUFFER_SIZE = 1024
 
 def whoelse(sock, request):
     """
@@ -76,16 +75,17 @@ def client_thread(sock):
     }
 
     # check right away if client is listed as blocked
-    data = conn.recv(BUFFER_SIZE)
+    data = conn.recv()
     if data != "is_blocked":
         return # the client cheated, so return and close conn
-    conn.send(json.dumps(access))
-    if is_blocked(sock): return
+    conn.sendall(json.dumps(access))
+    if is_blocked(sock):
+        return
 
     # await submission of client credentials
     while not access['is_granted']:
         for attempt in [1,2,3]:
-            creds = json.loads(conn.recv(BUFFER_SIZE))
+            creds = json.loads(conn.recv())
 
             # verify client credentials
             if creds['pwd'] == allowed.get(creds['user'], False):
@@ -119,7 +119,7 @@ def client_thread(sock):
     history.append(sock)
 
     while True:
-        request = json.loads(conn.recv(BUFFER_SIZE))
+        request = json.loads(conn.recv())
 
         print "received request: {0} from {1}:{2}" \
             .format(request, addr[0], addr[1])
@@ -141,49 +141,58 @@ def client_thread(sock):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument(
-        'port', 
-        help='the port the server will listen on',
-        type=int,
-    )
-    args = parser.parse_args()
+    parser.add_argument('port', help='the port the server will listen on', type=int)
+    parser.add_argument('filename',  help='name of file being transferred')
+    parser.add_argument('remote_ip',  help='remote host')
+    parser.add_argument('remote_port', help='remote port ', type=int)
+    parser.add_argument('ack_port', help='ack port ', type=int)
+    parser.add_argument('window_size', help='window size', type=int)
+    parser.add_argument('log_filename',   help='name of log file being transferred')
+    arg = parser.parse_args()
 
     # TODO validate port
 
     # instatiate tcp socket
-    sock = tcp_socket()
+    sock = TcpSocket(
+        remote = [arg.remote_ip, arg.remote_port],
+        port   = arg.ack_port,
+        log    = arg.log_filename,
+        window = arg.window_size,
+    )
 
     print 'socket initialized'
 
+    ''' TODO no longer needed?
     try:
         host = socket.gethostbyname(socket.gethostname())
-        sock.bind((host, args.port))
+        sock.bind((host, arg.port))
     except socket.error, msg:
         print "an error occured binding the server socket. \
                error code: {0}, msg:{1}".format(msg[0], msg[1])
         sys.exit()
+    '''
 
     # TODO can this be commented out? sock.listen(100)
-
-    print 'socket listening on {0}:{1}'.format(host, args.port)
     
     while True:
-        conn, addr = sock.accept()
+        # conn, addr = sock.accept()
         # 'sock' dict will replace sock socket. 
         # only adds information, does not delete info.
         s = {
-            'conn'      : conn, 
-            'addr'      : addr,
+            'conn'      : sock, 
+            'addr'      : (arg.remote_ip, arg.remote_port),
             'time'      : None, # filled in when user logs in
             'user'      : None, # ditto
             'has_access': False,
         }
         # the client port is a unique id for this connection
-        cport = addr[1]
+        cport = arg.remote_port
         # add conn info to conns dict
         connections[cport] = s
         # spawn thread to handle connection
-        thread.start_new_thread(client_thread, (s,))
+        # TODO thread.start_new_thread(client_thread, (s,))
+        # TODO Thread(target=client_thread, args=(s,)).run()
+        client_thread(s)
 
     close(s)
     #sock.close()

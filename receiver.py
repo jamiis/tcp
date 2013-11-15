@@ -1,5 +1,5 @@
 from argz import parse
-import socket, thread
+import socket
 from tcp_socket import TcpSocket
 
 arg = parse(is_receiver=True)
@@ -10,6 +10,5 @@ sock = TcpSocket(
     log    = arg.log_filename,
 )
 
-while True:
-    data = sock.recv()
-    open(arg.filename, 'w').write(data)
+data = sock.recv()
+open(arg.filename, 'w').write(data)
