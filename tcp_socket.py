@@ -16,7 +16,9 @@ SEGMENT_FORMAT = 'h h i i h 2s ? ? 2s 556s'
 SEGMENT_SIZE = 576
 SEGMENT_HEADER_SIZE = 20
 SEGMENT_DATA_SIZE = SEGMENT_SIZE - SEGMENT_HEADER_SIZE
-TIMEOUT = 1.0
+INITIAL_RTT = 1.0
+INITIAL_TIMEOUT = 1.0
+MIN_TIMEOUT = .05
 STDOUT = 'stdout'
 
 class TcpSocket(object):
@@ -24,6 +26,9 @@ class TcpSocket(object):
     TCP implemented on top of UDP via selective repeat protocol.
     Congestion and flow control not implemented.
     """
+
+    # round trip time will be set every time ACK received
+    rtt = INITIAL_RTT
 
     # segment represents a packet. tcp header + chunk of data.
     segment = struct.Struct(SEGMENT_FORMAT)
@@ -58,7 +63,11 @@ class TcpSocket(object):
         '''Reset variables before transmitting or receiving a new file'''
         # for sending #
         self.acked = defaultdict(lambda: False)
-        self.transmitted = defaultdict(lambda: False)
+        self.transmitted = defaultdict(lambda: {
+            'has_transmitted' : False,
+            'timeout'         : INITIAL_TIMEOUT,
+            'time'            : 0,
+        })
         # for receiving #
         self.received = defaultdict(lambda: {
             'is_buffered' : False, # has packet been received?
@@ -75,22 +84,16 @@ class TcpSocket(object):
         # TODO
         self.addr = addr
         self.ack_addr = (addr[0], self.ack_port)
-    '''
 
-    """ TODO fix this?
+    TODO fix this?
     def bind(self, addr):
-        '''bind receiver to listen for transmissions'''
         # TODO self.setup_addr(addr)
         self.s.bind(self.addr)
         self.logger.log('listening on: {0}'.format(self.addr))
-    """
-
-    """
     def connect(self, addr):
-        '''bind ack socket to listen for acks'''
         self.setup_addr(addr)
         self.ack_sock.bind(self.ack_addr)
-    """
+    '''
 
     def recv(self): 
         # TODO ask TA how to handle removing null chars on last packet.
@@ -135,7 +138,7 @@ class TcpSocket(object):
                     self.data += self.received[self.base]['buffer']
                     self.base += 1
                     # if delivering last packet, mark transmission as finished
-                    if self.received[seqnum]['is_last']:
+                    if self.received[self.base]['is_last']:
                         self.is_finished = True
 
     def get_checksum(self, data):
@@ -168,9 +171,22 @@ class TcpSocket(object):
         )
 
         self.s.sendto(packet, self.remote)
-        self.transmitted[seqnum] = True
+        # mark packet as having been transmitted
+        p = self.transmitted[seqnum]
+        p['has_transmitted'] = True
+        p['time'] = datetime.now()
+        # calculate and set new timeout
+        p['timeout'] = self.get_timeout(p['timeout'])
+        Timer(p['timeout'], self.retransmit_packet, [seqnum]).start()
+
         self.logger.log('sent packet {0} to {1}'.format(seqnum, self.remote))
-        Timer(TIMEOUT, self.retransmit_packet, [seqnum]).start()
+
+    def get_timeout(self, t_old):
+        t_new = 0.25 * t_old + 0.75 * self.rtt
+        if t_new < MIN_TIMEOUT:
+            t_new = MIN_TIMEOUT
+        self.logger.log('timeout: {0}'.format(t_new))
+        return t_new
 
     def retransmit_packet(self, seqnum):
         if not self.acked[seqnum]:
@@ -179,7 +195,7 @@ class TcpSocket(object):
     def send_untransmitted(self):
         '''transmits all packets in the window that have not been transmitted'''
         for p in self.get_window():
-            if not self.transmitted[p]:
+            if not self.transmitted[p]['has_transmitted']:
                 self.transmit_packet(p)
 
     def sendall(self, data):
@@ -200,6 +216,9 @@ class TcpSocket(object):
         while not self.is_finished:
             ack_data, addr = self.s.recvfrom(SEGMENT_SIZE)
             seqnum, = struct.unpack('i', ack_data)
+            # update round trip time
+            self.rtt = (datetime.now() - self.transmitted[seqnum]['time']).total_seconds()
+            self.logger.log('new RTT: {0}'.format(self.rtt))
             self.logger.log('received ack {0} from: {1}'.format(seqnum, addr))
             if self.in_window(seqnum):
                 self.ack(seqnum)
