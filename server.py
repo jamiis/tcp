@@ -150,8 +150,6 @@ def main():
     parser.add_argument('log_filename',   help='name of log file being transferred')
     arg = parser.parse_args()
 
-    # TODO validate port
-
     # instatiate tcp socket
     sock = TcpSocket(
         remote = [arg.remote_ip, arg.remote_port],
@@ -162,18 +160,6 @@ def main():
 
     print 'socket initialized'
 
-    ''' TODO no longer needed?
-    try:
-        host = socket.gethostbyname(socket.gethostname())
-        sock.bind((host, arg.port))
-    except socket.error, msg:
-        print "an error occured binding the server socket. \
-               error code: {0}, msg:{1}".format(msg[0], msg[1])
-        sys.exit()
-    '''
-
-    # TODO can this be commented out? sock.listen(100)
-    
     while True:
         # conn, addr = sock.accept()
         # 'sock' dict will replace sock socket. 
@@ -189,9 +175,7 @@ def main():
         cport = arg.remote_port
         # add conn info to conns dict
         connections[cport] = s
-        # spawn thread to handle connection
-        # TODO thread.start_new_thread(client_thread, (s,))
-        # TODO Thread(target=client_thread, args=(s,)).run()
+
         client_thread(s)
 
     close(s)

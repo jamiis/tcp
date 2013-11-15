@@ -1,0 +1,35 @@
+Programming Assignment 2. TCP Transport Layer.
+
+My implementation is through Selective Repeat. EOF is used to mark the end of a single file, not close the connection.
+
+Also, null characters are stripped from packets and I am assuming the null character will not be in any files we are transmitting.
+I could have worked around this, but I felt it was a fair assumption. I have supplied a 1 MB file for transferring if you do not have 
+a 1 Mb file without null chars.
+
+I'll jump right into some example uses. The commands should be executed in 2 or 3 different shells:
+
+./receiver written 4000 127.0.1.1 9999 stdout
+./newudpl -o 127.0.1.1/4000 -i 127.0.1.1/9999 -p5000:6000 -L 90
+./sender readable 127.0.1.1 5000 9999 7 stdout
+
+For the above, I recommend launching in that order, though it isn't pertinant. 
+But this is important!: it appears newudpl has a bug. When you see 'core dumps' it means 
+newudpl crapped out and needs to be restarted. If you're simply transferring a single file
+(not the extra credit part) you should be able to restart newudpl without having to restart
+the receiver or the sender. Also, IF `./<prog name>` doesn't work, please try `python <prog name>.py`
+
+
+EXTRA CREDIT:
+
+To test the extra credit, run:
+./newudpl -o 127.0.1.1/4000 -i 127.0.1.1/9999 -p5000:6000
+./receiver written 4000 127.0.1.1 9999 stdout
+./sender readable 127.0.1.1 5000 9999 7 stdout
+
+allowed users and passwords are found in the file 'allowed'. You can just use 'jamis' and 'pass'. 
+Commands 'whoelse', 'wholasthr', 'broadcast some message!' and also 'exit' should all 
+work (though possibly not flawlessly).
+
+NOTE: 
+Some of the positional arguments are a little weird, ie. 0.0.0.0 0, because I don't need them but they were asked for in the homework.
+In programming assignment 1, multiple connections were allowed. For this extra credit implementation, only one connection at a time is allowed. 

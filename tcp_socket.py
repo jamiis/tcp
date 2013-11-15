@@ -18,7 +18,7 @@ SEGMENT_HEADER_SIZE = 20
 SEGMENT_DATA_SIZE = SEGMENT_SIZE - SEGMENT_HEADER_SIZE
 INITIAL_RTT = 1.0
 INITIAL_TIMEOUT = 1.0
-MIN_TIMEOUT = .1
+MIN_TIMEOUT = .05
 STDOUT = 'stdout'
 
 class TcpSocket(object):
@@ -56,7 +56,8 @@ class TcpSocket(object):
         # listen at this address
         host = gethostbyname(gethostname())
         self.s.bind((host, port))
-        self.logger.log('listening on: {0}:{1}'.format(host, port))
+        self.source = port
+        self.logger.log('bound to: {0}:{1}'.format(host, port))
         # set address being transmitted to
         if remote[0].lower() == 'localhost':
             remote[0] = gethostbyname(gethostname())
@@ -67,38 +68,8 @@ class TcpSocket(object):
     def __getattr__(self,name):
         return getattr(self.s, name)
 
-    """ TODO do I need?
-    def accept():
-        sock = self.__init__()
-        sock.addr = self.addr
-        return sock
-    """
-
-    ''' TODO remove
-    def set_remote_addr(self, addr):
-        # TODO
-        self.addr = addr
-        self.ack_addr = (addr[0], self.ack_port)
-
-    TODO fix this?
-    def bind(self, addr):
-        # TODO self.setup_addr(addr)
-        self.s.bind(self.addr)
-        self.logger.log('listening on: {0}'.format(self.addr))
-    def connect(self, addr):
-        self.setup_addr(addr)
-        self.ack_sock.bind(self.ack_addr)
-    '''
-
     def recv(self): 
-        # TODO ask TA how to handle removing null chars on last packet.
-        #      will any data files contain null characters?
-        # TODO need to checksum over data *and* header?
-        # TODO EOF condition? need to exit the while loop?
-        # TODO check if seqnum in_window?
-        # TODO properly log corrupt packets instead of just 'bad check'
-        # TODO need this? if data[-1] == '\x00': 
-
+        # reset a few variables before receiving
         self.data = ''
         self.is_finished = False
 
@@ -110,20 +81,26 @@ class TcpSocket(object):
                 self.segment.unpack(r)
             # make sure packet isn't an ack packet
             if acknum == -1:
-                self.logger.log('received packet {0} from: {1}'.format(seqnum, addr))
+                self.logger.log(
+                    'source: {0}, destination: {1}, seqnum: {2}, acknum: {3}, eof: {4}'.format(
+                    src, dst, seqnum, acknum, eof)
+                )
                 # if this is the last packet (aka highest sequence number)
                 if eof: 
                     # mark buffered packet as last
                     self.received[seqnum]['is_last'] = True
-                    # strip null characters
-                    data = data.rstrip('\x00')
+                    # strip null characters from end of last packet
+                    if data[-1] == '\x00': 
+                        data = data.rstrip('\x00')
                 # is checksum is bad, drop packet
                 if checksum != self.get_checksum([seqnum, acknum, fin, eof, data]):
-                    import pdb; pdb.set_trace();
-                    self.logger.log('bad checksum!')
+                    # NOTE: I have decided *not* log bad checksums. the assignment didn't
+                    #       specify what to do. I could have if I wanted to with the code below:
+                    # self.logger.log('bad checksum!')
                     continue
                 self.rcvd(data, seqnum)
         self.logger.log('file received successfully')
+        # pass data up from transport layer to application layer
         return self.data
 
     def rcvd(self, data, seqnum):
@@ -150,38 +127,39 @@ class TcpSocket(object):
         return md5(st).digest()[:2]
 
     def transmit_ack(self, acknum):
-        # TODO change src and dst
-        # TODO need checksum?
-        src = 0; dst = 0; seqnum = -1;
-        fin = False; eof = False; data = '';
+        # set source and destination ports
+        src = self.source
+        dst = self.remote[1]
+        # this is an ack packet so these flags and data can be arbitrary
+        seqnum = -1; fin = False; eof = False; data = '';
+        # pack into struct
         packet = self.segment.pack(
             src, dst, seqnum, acknum, 
             SEGMENT_HEADER_SIZE, '', 
             fin, eof, '', data
         )
+        # send ack across the wire
         self.s.sendto(packet, self.remote)
-        self.logger.log('ack {0} sent to: {1}'.format(acknum, self.remote))
 
     def transmit_packet(self, seqnum):
-        # TODO need to checksum over data *and* header? yes
-        # TODO check if 'pos' goes over end of data
-        # TODO adjust timeout value as per tcp standard, see: piazza
-        # TODO fix srcport and dstport
+        # set all tcp header and data values
         pos = (seqnum-self.start_base)
         pos_bytes = pos*SEGMENT_DATA_SIZE
         data = self.data[pos_bytes : pos_bytes + SEGMENT_DATA_SIZE]
-        # TODO change src and dst
-        src = 1111; dst = 2222; fin = False;
+        src = self.source
+        dst = self.remote[1]
+        fin = False
         eof = False if pos != self.num_packets - 1 else True
-        acknum = -1 # -1 means field isn't needed
+        # not an ack packet so set acknum to -1
+        acknum = -1 
         checksum = self.get_checksum([seqnum, acknum, fin, eof, data])
-
+        # pack tcp header and data into struct
         packet = self.segment.pack(
             src, dst, seqnum, acknum, 
             SEGMENT_HEADER_SIZE, checksum, 
             fin, eof, '', data
         )
-
+        # send binary data across the wire
         self.s.sendto(packet, self.remote)
         # mark packet as having been transmitted
         p = self.transmitted[seqnum]
@@ -189,28 +167,32 @@ class TcpSocket(object):
         p['time'] = datetime.now()
         # calculate and set new timeout
         p['timeout'] = self.get_timeout(p['timeout'])
+        # start timeout timer for retransmitting packet
         Timer(p['timeout'], self.retransmit_packet, [seqnum]).start()
 
-        self.logger.log('sent packet {0} to {1}'.format(seqnum, self.remote))
-
     def get_timeout(self, t_old):
+        '''calculates timeout for a packet based on previous timeout and most recent rtt'''
         t_new = 0.25 * t_old + 0.75 * self.rtt
         if t_new < MIN_TIMEOUT:
             t_new = MIN_TIMEOUT
-        self.logger.log('timeout: {0}'.format(t_new))
         return t_new
 
     def retransmit_packet(self, seqnum):
+        '''retransmit packet unless the packet has been acked'''
         if not self.acked[seqnum]:
             self.transmit_packet(seqnum)
 
     def send_untransmitted(self):
-        '''transmits all packets in the window that have not been transmitted'''
+        '''transmits all packets in the window that have not been transmitted. 
+        packets that have not been acked but have already been transmitted will 
+        be retransmitted when their timer runs out.'''
         for p in self.get_window():
             if not self.transmitted[p]['has_transmitted']:
                 self.transmit_packet(p)
 
     def sendall(self, data):
+        '''send data across the wire to self.remote over tcp'''
+        # set/reset some variables before beginning transmission
         self.data = data
         self.is_finished = False
         self.num_packets = len(self.data) / SEGMENT_DATA_SIZE
@@ -219,32 +201,35 @@ class TcpSocket(object):
         # these are used for easing certain calculations later
         self.start_base = self.base
         self.last_base = self.base + self.num_packets
+        # self.logger.log('total number of packets needed: {0}'.format(self.num_packets))
 
-        self.logger.log('total number of packets needed: {0}'.format(self.num_packets))
-
+        # sending the untransmitted will send the packets in the window and start 
+        # timer threads which will handle sending all future packets not yet in the window
         self.send_untransmitted()
-        self.recv_acks()
 
-    def recv_acks(self):
-        # TODO closing connection needs to be done on application layer
+        # start looking for incoming acks
         while not self.is_finished:
+            # receive data struct and unpack into variables
             ack_data, addr = self.s.recvfrom(SEGMENT_SIZE)
             src, dst, seqnum, acknum, headlen, checksum, fin, eof, unused, data = \
                 self.segment.unpack(ack_data)
-            # check if ack packet
+            # make sure packet is an ack
             if acknum >= 0:
                 # update round trip time
                 self.rtt = (datetime.now() - self.transmitted[acknum]['time']).total_seconds()
-                self.logger.log('new RTT: {0}'.format(self.rtt))
-                self.logger.log('received ack {0} from: {1}'.format(acknum, addr))
+                # log received ack
+                self.logger.log(
+                    'source: {0}, destination: {1}, seqnum: {2}, acknum: {3}, eof: {4}, rtt: {5}'.format(
+                    src, dst, seqnum, acknum, eof, self.rtt)
+                )
+                # mark packet as acked
                 self.ack(acknum)
+
+        # at this point, the file has been transmitted successfully
         self.logger.log('file sent successfully')
-        # TODO sending FINs and closing needs to be moved to application layer!
-        #self.close_conn()
 
     def ack(self, acknum):
         self.acked[acknum] = True
-        self.logger.log('acked: {0}'.format(acknum))
         if acknum == self.base:
             #move base until next un-acked packet'''
             while self.acked[self.base]:
@@ -256,54 +241,31 @@ class TcpSocket(object):
             if not self.is_finished:
                 self.send_untransmitted()
 
-    def get_upper_window(self):
-        upper = self.base + self.window_size
-        if upper > self.last_base:
-            upper =  self.last_base
-        return upper
-
     def get_window(self):
         lower = self.base
-        upper = self.get_upper_window()
+        upper = self.base + self.window_size
+        # make sure upper doesn't exceed the last base sequence number
+        if upper > self.last_base:
+            upper =  self.last_base
         return range(lower, upper)
-
-    # TODO not used:
-    def in_window(self, seqnum):
-        lower = self.base
-        upper = self.get_upper_window()
-        return seqnum >= lower and seqnum < upper
-
-    def send_fin(self):
-        # TODO remove?
-        if not self.closed:
-            fin = struct.pack('i', 1)
-            self.s.sendto(fin, self.remote)
-            Timer(TIMEOUT, send_fin)
-
-    def close_conn():
-        '''notify receiver that transmission is done via FIN and close connection'''
-        # TODO
-        send_fin()
-        while True:
-            ack_data = self.s.recv(SEGMENT_SIZE)
-            fin, = struct.unpack('i', ack_data)
-            self.logger.log('fin ack received!: {0}'.format(seqnum))
-            if fin: break
-        self.logger.close()
 
 
 class Logger(Thread):
+    '''specialized logger that will log to a filename or, if filename is 'stdout'
+    will print to stdout. also, uses locks to ensure there aren't race conditions'''
     lock = Lock()
 
     def __init__(self, filename):
         super(Logger, self).__init__()
         self.is_stdout = filename == STDOUT 
         if not self.is_stdout:
+            # will erase contents of filename if filename exists
             self.f = open(filename, 'w')
 
     def log(self, msg):
         with self.lock:
-            msg = '{0} {1}'.format(datetime.now(), msg)
+            msg = '{0}, {1}'.format(datetime.now(), msg)
+            # if stdout, print to console
             if self.is_stdout:
                 print msg
             else:
